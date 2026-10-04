@@ -1,0 +1,26 @@
+on: [push, pull_request]
+name: Test
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Run every command with GOWORK=off, so that no workspace changes the
+    # result.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      # The runner image has Google Chrome installed. The tests need no
+      # terminal.
+      - name: Test
+        run: go test -v ./...
