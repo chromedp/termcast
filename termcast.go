@@ -13,8 +13,8 @@
 // changes. The stream keeps the latest frame and draws it again only when it is
 // new, so a page that stops changing stays on the screen.
 //
-// The log lines of the program would draw over the frames and the next redraw
-// would erase them. [Stream.LogWriter] holds the lines while the stream runs
+// The log lines of the program draw over the frames, and the next redraw
+// erases them. [Stream.LogWriter] holds the lines while the stream runs
 // and prints them when the stream stops, after a final frame. The stream does
 // not work together with the protocol messages of a flag such as -v, because
 // they also draw over the frames. [Flags.Start] returns [ErrVerbose] for that

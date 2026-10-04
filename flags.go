@@ -28,7 +28,7 @@ func (f *Flags) Register(fs *flag.FlagSet) {
 // Start starts a stream when the flag -visible-on-terminal is on. It returns a
 // nil stream and no error when the flag is off. A nil stream is safe to use.
 // It returns [ErrVerbose] when the flag is on and verbose is true, because the
-// protocol messages of -v would draw over the frames. Otherwise it returns the
+// protocol messages of -v can draw over the frames. Otherwise it returns the
 // result of [Start], with the frame rate of -terminal-fps.
 func (f *Flags) Start(ctx context.Context, verbose bool, opts ...Option) (*Stream, error) {
 	switch {

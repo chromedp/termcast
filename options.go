@@ -58,7 +58,7 @@ func newConfig(opts []Option) (*config, error) {
 	}
 	if c.encoder == nil {
 		// The encoders do not add a newline after an image. A newline at the
-		// bottom of the screen would scroll the image.
+		// bottom of the screen scrolls the image.
 		c.encoder = rasterm.NewDefaultEncoder(
 			rasterm.KittyEncoder{NoNewline: true},
 			rasterm.ITermEncoder{NoNewline: true},
