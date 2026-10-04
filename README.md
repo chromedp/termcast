@@ -82,6 +82,8 @@ To start the stream with no flag, call `termcast.Start(ctx, opts...)`.
 The browser sends a frame only when the page changes. The stream keeps the
 latest frame. At each tick it clears the terminal and draws the latest frame,
 but only when the frame is new. A page that stops changing stays on the screen.
+A program can end before the browser sends the first frame. In that case `Stop`
+takes one screenshot, so that the final frame is never empty.
 
 The stream clears the screen with `\x1b[H\x1b[2J` at each redraw. It uses no
 alternate screen and does not hide the cursor. A program that ends with

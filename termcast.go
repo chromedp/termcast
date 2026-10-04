@@ -231,7 +231,7 @@ func (s *Stream) fail(err error) {
 }
 
 // Stop stops the screencast and the goroutines of the stream, draws the final
-// frame once, and then prints the held log lines. It is safe to call more than
+// frame once (it takes a screenshot when no frame arrived), and then prints the held log lines. It is safe to call more than
 // once and from several goroutines. A call that arrives while another one runs
 // waits until that one is done. The stream also stops by itself when the
 // context of [Start] ends. It does nothing on a nil stream.
@@ -255,6 +255,11 @@ func (s *Stream) Stop() {
 		s.mu.Lock()
 		img := s.frame
 		s.mu.Unlock()
+		if img == nil {
+			// A page that ends fast can end before the first frame arrives.
+			// Take one screenshot, so that the final frame is never empty.
+			img = s.screenshot()
+		}
 		if img != nil {
 			if err := s.draw(img); err != nil {
 				s.fail(err)
@@ -265,6 +270,33 @@ func (s *Stream) Stop() {
 		}
 		s.flush()
 	})
+}
+
+// screenshot takes one screenshot of the page and decodes it. It returns nil
+// when the context has ended or the browser cannot take the screenshot. The
+// error is kept for [Stream.Err].
+func (s *Stream) screenshot() image.Image {
+	if s.ctx.Err() != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	res, err := chromedp.Call(ctx, page.CaptureScreenshot, page.CaptureScreenshotParams{
+		Format:  page.CaptureScreenshotFormatJpeg,
+		Quality: new(int64(s.cfg.quality)),
+	})
+	if err != nil {
+		if s.ctx.Err() == nil {
+			s.fail(fmt.Errorf("taking the final screenshot: %w", err))
+		}
+		return nil
+	}
+	img, err := jpeg.Decode(bytes.NewReader(res.Data))
+	if err != nil {
+		s.fail(fmt.Errorf("decoding the final screenshot: %w", err))
+		return nil
+	}
+	return img
 }
 
 // flush prints the held log lines. After it, the log writer passes the lines

@@ -356,3 +356,19 @@ func settleTo(limit int) int {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+func TestStopDrawsAFrameWhenNoneArrived(t *testing.T) {
+	ctx := browser(t)
+	// Stop at once, before the browser can send the first frame.
+	s, enc, out, _ := start(t, ctx, 4)
+	s.Stop()
+	if n := enc.frames.Load(); n < 1 {
+		t.Fatalf("Stop drew %d frames, want at least 1", n)
+	}
+	if !strings.Contains(out.String(), "[frame ") {
+		t.Errorf("the output has no frame: %q", out.String())
+	}
+	if err := s.Err(); err != nil {
+		t.Errorf("Err() = %v", err)
+	}
+}
