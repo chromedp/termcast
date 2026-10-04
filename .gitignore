@@ -1,0 +1,4 @@
+# The Claude Code permissions of one person, and the local workspace file.
+/.claude/settings.local.json
+go.work
+go.work.sum
