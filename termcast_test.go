@@ -372,3 +372,83 @@ func TestStopDrawsAFrameWhenNoneArrived(t *testing.T) {
 		t.Errorf("Err() = %v", err)
 	}
 }
+
+// boxPage has a box of 200 by 100 pixels at a known place, and the box changes
+// all the time, so the browser sends frames.
+const boxPage = `<html><body style="margin: 0">
+<div style="height: 80px"></div>
+<div id="box" style="margin: 0 0 0 60px; width: 200px; height: 100px; font: 40px sans-serif">0</div>
+<script>
+let n = 0;
+setInterval(() => { document.getElementById("box").textContent = ++n; }, 20);
+</script></body></html>`
+
+func browserFor(t *testing.T, html string) context.Context {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, html)
+	}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := chromedp.NewContext(context.Background())
+	t.Cleanup(cancel)
+	if err := chromedp.Do(ctx, chromedp.Navigate(srv.URL)); err != nil {
+		t.Fatal(err)
+	}
+	return ctx
+}
+
+func TestWithElementDrawsOnlyTheElement(t *testing.T) {
+	ctx := browserFor(t, boxPage)
+	enc, out := new(fakeEncoder), new(syncBuffer)
+	s, err := termcast.Start(ctx,
+		termcast.WithEncoder(enc),
+		termcast.WithOutput(out),
+		termcast.WithLogOutput(new(syncBuffer)),
+		termcast.WithFPS(10),
+		termcast.WithElement(chromedp.CSS("#box")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	s.Stop()
+	var n, w, h int
+	for _, line := range strings.Split(out.String(), "]") {
+		if i := strings.LastIndex(line, "[frame "); i >= 0 {
+			if _, err := fmt.Sscanf(line[i:], "[frame %d %dx%d", &n, &w, &h); err != nil {
+				t.Fatalf("reading %q: %v", line[i:], err)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("the stream drew no frame")
+	}
+	// The box is 200 by 100 pixels. The frame has the scale of the screen, so
+	// the sides keep their ratio of 2 to 1, within a pixel of rounding.
+	if w < 100 || h < 50 || w < 2*h-4 || w > 2*h+4 {
+		t.Errorf("the last frame is %dx%d, want a box with the ratio 2 to 1", w, h)
+	}
+	if err := s.Err(); err != nil {
+		t.Errorf("Err() = %v", err)
+	}
+}
+
+func TestWithElementKeepsTheScreenWhenTheElementIsMissing(t *testing.T) {
+	ctx := browser(t)
+	enc, out := new(fakeEncoder), new(syncBuffer)
+	s, err := termcast.Start(ctx,
+		termcast.WithEncoder(enc),
+		termcast.WithOutput(out),
+		termcast.WithLogOutput(new(syncBuffer)),
+		termcast.WithFPS(10),
+		termcast.WithElement(chromedp.CSS("#nothing")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	s.Stop()
+	if got := enc.frames.Load(); got != 0 {
+		t.Errorf("the stream drew %d frames of an element that is not in the page", got)
+	}
+}

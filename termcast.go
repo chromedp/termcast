@@ -31,10 +31,12 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/jpeg"
 	"io"
 	"iter"
 	"log"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -92,6 +94,9 @@ type Stream struct {
 	// first error.
 	mu    sync.Mutex
 	frame image.Image
+	// width is the width of the screen in CSS pixels at the time of frame. It
+	// is 0 when the frame is a screenshot.
+	width float64
 	fresh bool
 	err   error
 
@@ -176,7 +181,7 @@ func (s *Stream) read(ctx context.Context, frames iter.Seq2[page.EventScreencast
 			continue
 		}
 		s.mu.Lock()
-		s.frame, s.fresh = img, true
+		s.frame, s.width, s.fresh = img, ev.Metadata.DeviceWidth, true
 		s.mu.Unlock()
 	}
 }
@@ -192,10 +197,13 @@ func (s *Stream) loop(ctx context.Context) {
 			return
 		case <-t.C:
 			s.mu.Lock()
-			img, fresh := s.frame, s.fresh
+			img, width, fresh := s.frame, s.width, s.fresh
 			s.fresh = false
 			s.mu.Unlock()
 			if !fresh {
+				continue
+			}
+			if img = s.view(ctx, img, width); img == nil {
 				continue
 			}
 			if err := s.draw(img); err != nil {
@@ -204,6 +212,51 @@ func (s *Stream) loop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// view returns the part of img that the stream draws. It returns img itself
+// when the stream has no element. Otherwise it returns the border box of the
+// element, which it looks up again at each call, so an element that moves or
+// changes its size stays in view. width is the width of the screen in CSS
+// pixels when the browser made the frame, or 0 for a frame that has the scale
+// of the page. view returns nil when the element is not in the page or not in
+// the frame, and then the stream keeps what is on the screen.
+func (s *Stream) view(ctx context.Context, img image.Image, width float64) image.Image {
+	if s.cfg.element == nil {
+		return img
+	}
+	// A page that does not have the element yet must not hold the stream.
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	box, err := s.cfg.element(ctx)
+	if err != nil || box == nil || len(box.Border) < 8 {
+		return nil
+	}
+	b := img.Bounds()
+	scale := 1.0
+	if width > 0 {
+		scale = float64(b.Dx()) / width
+	}
+	minX, minY, maxX, maxY := box.Border[0], box.Border[1], box.Border[0], box.Border[1]
+	for i := 2; i < 8; i += 2 {
+		minX, maxX = min(minX, box.Border[i]), max(maxX, box.Border[i])
+		minY, maxY = min(minY, box.Border[i+1]), max(maxY, box.Border[i+1])
+	}
+	r := image.Rect(
+		b.Min.X+int(math.Floor(minX*scale)), b.Min.Y+int(math.Floor(minY*scale)),
+		b.Min.X+int(math.Ceil(maxX*scale)), b.Min.Y+int(math.Ceil(maxY*scale)),
+	).Intersect(b)
+	if r.Empty() {
+		return nil
+	}
+	if si, ok := img.(interface {
+		SubImage(image.Rectangle) image.Image
+	}); ok {
+		return si.SubImage(r)
+	}
+	out := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	draw.Draw(out, out.Bounds(), img, r.Min, draw.Src)
+	return out
 }
 
 // draw clears the screen and draws the image. It encodes the image first and
@@ -253,12 +306,15 @@ func (s *Stream) Stop() {
 			}
 		}
 		s.mu.Lock()
-		img := s.frame
+		img, width := s.frame, s.width
 		s.mu.Unlock()
 		if img == nil {
 			// A page that ends fast can end before the first frame arrives.
 			// Take one screenshot, so that the final frame is never empty.
-			img = s.screenshot()
+			img, width = s.screenshot(), 0
+		}
+		if img != nil {
+			img = s.view(s.ctx, img, width)
 		}
 		if img != nil {
 			if err := s.draw(img); err != nil {

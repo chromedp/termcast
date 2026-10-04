@@ -1,10 +1,13 @@
 package termcast
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/chromedp"
 	"github.com/kenshaw/rasterm"
 )
 
@@ -32,6 +35,9 @@ type config struct {
 	out     io.Writer
 	logOut  io.Writer
 	encoder rasterm.Encoder
+	// element returns the box model of the element that the stream shows, or
+	// is nil when the stream shows the whole page.
+	element func(context.Context) (*dom.BoxModel, error)
 }
 
 // newConfig returns the settings with the default values and the options
@@ -104,4 +110,21 @@ func WithLogOutput(w io.Writer) Option {
 // encoder that you give if it is available, and it does not ask [rasterm].
 func WithEncoder(enc rasterm.Encoder) Option {
 	return func(c *config) { c.encoder = enc }
+}
+
+// WithElement makes the stream draw only the element that sel selects, and not
+// the whole page. The element is the first one that the selector matches, for
+// example chromedp.CSS("#chart"). The stream looks the element up again at each
+// frame, so an element that moves or changes its size stays in view.
+//
+// The browser sends the viewport, so the stream shows the part of the element
+// that is in the viewport. Scroll the element into view first, for example
+// with [chromedp.ScrollIntoView]. While the page has no such element, the
+// stream keeps what is on the screen.
+func WithElement[S chromedp.Selectable](sel S) Option {
+	return func(c *config) {
+		c.element = func(ctx context.Context) (*dom.BoxModel, error) {
+			return chromedp.Run(ctx, chromedp.Dimensions(sel))
+		}
+	}
 }

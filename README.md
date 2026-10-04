@@ -100,6 +100,7 @@ changed state. See
 | `WithMaxSize(w, h)` | 1024 by 768 | The largest size of a frame in pixels |
 | `WithOutput(w)` | `os.Stdout` | The writer that receives the frames |
 | `WithLogOutput(w)` | `os.Stderr` | The writer that receives the held log lines |
+| `WithElement(sel)` | the whole page | Draws only the element that the selector finds |
 | `WithEncoder(e)` | Kitty, iTerm2 or Sixel | The `rasterm.Encoder` that draws a frame |
 
 `Flags` registers two flags: `-visible-on-terminal`, which turns the stream on,
@@ -108,6 +109,22 @@ and `-terminal-fps`, which sets the frame rate and defaults to 4.
 ## Programs that use it
 
 The [`chromedp/examples`](https://github.com/chromedp/examples) repository has 34 programs that use `termcast`. Most of them take the flags `-visible-on-terminal` and `-terminal-fps` with `Flags`. The program [termcast](https://github.com/chromedp/examples/tree/main/termcast) calls `Start` directly. It plays an animated SVG and streams it to the terminal. These programs use the package: [click](https://github.com/chromedp/examples/tree/main/click), [console](https://github.com/chromedp/examples/tree/main/console), [cookie](https://github.com/chromedp/examples/tree/main/cookie), [dialogs](https://github.com/chromedp/examples/tree/main/dialogs), [download_file](https://github.com/chromedp/examples/tree/main/download_file), [download_image](https://github.com/chromedp/examples/tree/main/download_image), [dragdrop](https://github.com/chromedp/examples/tree/main/dragdrop), [emulate](https://github.com/chromedp/examples/tree/main/emulate), [eval](https://github.com/chromedp/examples/tree/main/eval), [eventsiter](https://github.com/chromedp/examples/tree/main/eventsiter), [exposefunc](https://github.com/chromedp/examples/tree/main/exposefunc), [extension](https://github.com/chromedp/examples/tree/main/extension), [fast](https://github.com/chromedp/examples/tree/main/fast), [forecast](https://github.com/chromedp/examples/tree/main/forecast), [frames](https://github.com/chromedp/examples/tree/main/frames), [geoip](https://github.com/chromedp/examples/tree/main/geoip), [headers](https://github.com/chromedp/examples/tree/main/headers), [intercept](https://github.com/chromedp/examples/tree/main/intercept), [keys](https://github.com/chromedp/examples/tree/main/keys), [latlon](https://github.com/chromedp/examples/tree/main/latlon), [logic](https://github.com/chromedp/examples/tree/main/logic), [pdf](https://github.com/chromedp/examples/tree/main/pdf), [pdfoptions](https://github.com/chromedp/examples/tree/main/pdfoptions), [proxy](https://github.com/chromedp/examples/tree/main/proxy), [remote](https://github.com/chromedp/examples/tree/main/remote), [screenshot](https://github.com/chromedp/examples/tree/main/screenshot), [selectors](https://github.com/chromedp/examples/tree/main/selectors), [structeval](https://github.com/chromedp/examples/tree/main/structeval), [submit](https://github.com/chromedp/examples/tree/main/submit), [subtree](https://github.com/chromedp/examples/tree/main/subtree), [termcast](https://github.com/chromedp/examples/tree/main/termcast), [text](https://github.com/chromedp/examples/tree/main/text), [upload](https://github.com/chromedp/examples/tree/main/upload) and [visible](https://github.com/chromedp/examples/tree/main/visible).
+
+## Show one element
+
+`WithElement` takes a `chromedp` selector, such as `chromedp.CSS("#chart")`, and
+draws only the first element that it matches.
+
+```go
+s, err := termcast.Start(ctx, termcast.WithElement(chromedp.CSS("#chart")))
+```
+
+The stream looks up the element again at each frame, so an element that moves
+or changes its size stays in view. It crops the frame to the border box of the
+element. The browser sends the viewport, so the stream shows the part of the
+element that is in the viewport. Use `chromedp.ScrollIntoView` first when the
+element is lower on the page. While the page has no such element, the stream
+keeps what is on the screen.
 
 ## Terminals that work
 
