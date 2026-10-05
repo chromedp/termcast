@@ -284,10 +284,11 @@ func (s *Stream) fail(err error) {
 }
 
 // Stop stops the screencast and the goroutines of the stream, draws the final
-// frame once (it takes a screenshot when no frame arrived), and then prints the held log lines. It is safe to call more than
-// once and from several goroutines. A call that arrives while another one runs
-// waits until that one is done. The stream also stops by itself when the
-// context of [Start] ends. It does nothing on a nil stream.
+// frame once, and then prints the held log lines. When no frame arrived, it
+// takes one screenshot as the final frame. It is safe to call more than once
+// and from several goroutines. A call that arrives while another one runs waits
+// until that one is done. The stream also stops by itself when the context of
+// [Start] ends. It does nothing on a nil stream.
 func (s *Stream) Stop() {
 	if s == nil {
 		return

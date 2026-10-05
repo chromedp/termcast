@@ -6,8 +6,9 @@ the Chrome DevTools Protocol and the package `github.com/kenshaw/rasterm`. The
 module is `github.com/chromedp/termcast`. The example programs of
 `chromedp/examples` use it for the flag `-visible-on-terminal`.
 
-The package uses `chromedp` v0.19.0 and `cdproto` v0.157.5. It has no other
-dependency, apart from `rasterm` and the Go standard library.
+The package uses `chromedp` v0.20.0 and `cdproto` v0.157.8. It has no other
+dependency, apart from `rasterm` and the Go standard library. The module needs
+Go 1.25 or later.
 
 ## Standing rules
 

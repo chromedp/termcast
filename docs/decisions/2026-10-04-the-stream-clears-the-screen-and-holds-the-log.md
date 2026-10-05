@@ -54,5 +54,5 @@ A long run holds every log line in memory until the stream stops. The package
 accepts this, because the examples log a few lines.
 
 The stream also stops by itself when the context of `Start` ends. It then draws
-the final frame and prints the held lines, so a program that forgets `Stop`
-loses nothing.
+the last frame that it has, if any, and prints the held lines, so a program
+that forgets `Stop` loses no log line.

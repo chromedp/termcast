@@ -14,7 +14,8 @@ in Kitty, iTerm2 and Sixel terminals. You start it with one call.
 
 ## Install
 
-The module needs Go 1.25 or later. It requires `chromedp` v0.20.0 and `cdproto` v0.157.8.
+The module needs Go 1.25 or later. It requires `chromedp` v0.20.0 and
+`cdproto` v0.157.8.
 
 ```sh
 go get github.com/chromedp/termcast
@@ -22,8 +23,9 @@ go get github.com/chromedp/termcast
 
 ## Usage
 
-Start the browser first, because the stream needs a page. Then call
-`Flags.Start` or `Start` with the context. The stream stops when you call
+Load the page first, so that the stream has a page to show. `Start` also starts
+the browser when the context has none. Then call `Flags.Start` or `Start` with
+the context. The stream stops when you call
 `Stop`, and when the context ends.
 
 ```go
