@@ -66,7 +66,7 @@ you trust it, because a later decision can amend or replace it.
 | `.agents/skills/` and `.claude/skills/` | the two agent skills, as copies |
 | `skills-lock.json` | the source of each skill |
 | `.github/workflows/test.yml` | the workflow that builds, vets and tests |
-| `go.mod`, `go.sum` | the module, which needs Go 1.27 |
+| `go.mod`, `go.sum` | the module, which needs Go 1.25 |
 
 The root of the repository holds `README.md`, `AGENTS.md`, `CLAUDE.md`,
 `CONTRIBUTING.md` and `LICENSE` as text documents. Every other document goes in

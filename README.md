@@ -14,7 +14,7 @@ in Kitty, iTerm2 and Sixel terminals. You start it with one call.
 
 ## Install
 
-The module needs Go 1.27. It requires `chromedp` v0.19.0 and `cdproto` v0.157.5.
+The module needs Go 1.25 or later. It requires `chromedp` v0.20.0 and `cdproto` v0.157.8.
 
 ```sh
 go get github.com/chromedp/termcast

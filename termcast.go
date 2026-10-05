@@ -130,7 +130,7 @@ func Start(ctx context.Context, opts ...Option) (*Stream, error) {
 	frames := chromedp.Events(rctx, page.ScreencastFrame)
 	if _, err := chromedp.Call(rctx, page.StartScreencast, page.StartScreencastParams{
 		Format:        page.StartScreencastFormatJpeg,
-		Quality:       new(int64(cfg.quality)),
+		Quality:       ptr(int64(cfg.quality)),
 		MaxWidth:      int64(cfg.width),
 		MaxHeight:     int64(cfg.height),
 		EveryNthFrame: 1,
@@ -339,7 +339,7 @@ func (s *Stream) screenshot() image.Image {
 	defer cancel()
 	res, err := chromedp.Call(ctx, page.CaptureScreenshot, page.CaptureScreenshotParams{
 		Format:  page.CaptureScreenshotFormatJpeg,
-		Quality: new(int64(s.cfg.quality)),
+		Quality: ptr(int64(s.cfg.quality)),
 	})
 	if err != nil {
 		if s.ctx.Err() == nil {
@@ -414,3 +414,7 @@ func (w logWriter) Write(p []byte) (int, error) {
 	}
 	return w.s.held.Write(p)
 }
+
+// ptr returns a pointer to a copy of v. The optional fields of the protocol
+// commands are pointers, because zero is a valid value.
+func ptr[T any](v T) *T { return &v }

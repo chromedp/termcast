@@ -1,7 +1,9 @@
-github.com/chromedp/cdproto v0.157.5 h1:+5/BBXH68BnlTWZqW9kY/TKD8SKMf6ZCPMo9Qv8oW7w=
-github.com/chromedp/cdproto v0.157.5/go.mod h1:scNPhJ/A4T8BVkyR5k2Uocvoju3iBRZS4cg3uMlxuMk=
-github.com/chromedp/chromedp v0.19.0 h1:fmRpyKU7Y6mSvoVLK9olbzMVBcvw3KA996eKi4dUZI4=
-github.com/chromedp/chromedp v0.19.0/go.mod h1:4Rs9XtapAMgXxg0s1PpixyQHf37kdnSdu2ov5G4FsZ0=
+github.com/chromedp/cdproto v0.157.8 h1:Tkq0AjsUlC3Z4sJfHBzV/uAAxnTF/AZyuSTjfV/1gvk=
+github.com/chromedp/cdproto v0.157.8/go.mod h1:h68JaIuFr9o3yiayxEYhBdvaxgYO3shDrPSYhNlyfu0=
+github.com/chromedp/chromedp v0.20.0 h1:faPCf3EpAKQX8OWHhXu1gEcrr658PxV+3E7nhvq7c2E=
+github.com/chromedp/chromedp v0.20.0/go.mod h1:6z1Y5FdKUxRzxx2qcC5h1xjaBJrSWrZp1mjgITfNZig=
+github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
+github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/kenshaw/rasterm v0.1.17 h1:d0lybneB4Gz4OPytiyG7q1vsBOfSzu0bn9DGUXQfOHU=
 github.com/kenshaw/rasterm v0.1.17/go.mod h1:pwcEWmdetZLCKAPJQLhwP8bFgHJIrn49Kck/EAfRjV4=
 github.com/mattn/go-sixel v0.0.11 h1:+1qa839dVz5UxA0w/gQBbC1+5hb1b6DSAidf+caN63s=
