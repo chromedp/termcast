@@ -2,27 +2,31 @@
 // has graphics.
 //
 // It uses the screencast of the Chrome DevTools Protocol to get the frames of
-// the page, and the package [rasterm] to draw them. The terminal must support
+// the page, and the package [rasterm] to draw them. [Start] asks the terminal
+// which graphics it has, with [rasterm.Detect]. The terminal must support
 // Kitty, iTerm2 or Sixel graphics. [Start] returns [ErrNoGraphics] when it
 // does not.
 //
-// The stream clears the terminal at each redraw and draws the latest frame. It
-// uses no alternate screen and does not hide the cursor. A program that ends
-// with [log.Fatal] skips its deferred calls, so the stream must never leave the
-// terminal in a changed state. The browser sends a frame only when the page
-// changes. The stream keeps the latest frame and draws it again only when it is
-// new, so a page that stops changing stays on the screen.
+// The browser sends a frame only when the page changes. The stream keeps the
+// latest frame and draws it again only when it is new, so a page that stops
+// changing stays on the screen. On a Kitty terminal that plays animations,
+// the stream draws each frame into one Kitty image, so the picture changes
+// with no flicker. See [WithAnimation]. On other terminals, the stream clears
+// the screen at each redraw and draws the latest frame. It uses no alternate
+// screen and does not hide the cursor. A program that ends with [log.Fatal]
+// skips its deferred calls, so the stream must never leave the terminal in a
+// changed state.
 //
-// The log lines of the program draw over the frames, and the next redraw
-// erases them. [Stream.LogWriter] holds the lines while the stream runs
-// and prints them when the stream stops, after a final frame. The stream does
-// not work together with the protocol messages of a flag such as -v, because
-// they also draw over the frames. [Flags.Start] returns [ErrVerbose] for that
-// combination.
+// The log lines of the program draw over the frames. [Stream.LogWriter] holds
+// the lines while the stream runs and prints them when the stream stops, after
+// a final frame. Other output that draws over the frames, such as the protocol
+// messages of [chromedp.WithDebugf], does not work together with the stream.
+// The program decides which one it shows.
 //
-// Every method of [*Stream] is safe on a nil pointer. A program can write
-// s.Stop, s.Fatal and s.LogWriter whether the stream is on or off. See
-// [Flags] and the example for the intended use.
+// A nil [*Stream] is a stream that is off, and its methods are safe. So a
+// program starts the stream only when its own flag asks for it, and writes
+// defer s.Stop() and log.SetOutput(s.LogWriter()) in either case. See the
+// example.
 package termcast
 
 import (
@@ -32,12 +36,11 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
-	"image/jpeg"
 	"io"
 	"iter"
-	"log"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,30 +60,34 @@ func (err Error) Error() string {
 
 const (
 	// ErrNoGraphics is the error that [Start] returns when the terminal has no
-	// graphics. rasterm detects Kitty, iTerm2 and Sixel from the environment
-	// and from a query to the terminal. The variable TERM_GRAPHICS can force
+	// graphics. [rasterm.Detect] finds Kitty, iTerm2 and Sixel from a query to
+	// the terminal and from the environment. The variable TERM_GRAPHICS can force
 	// the type to kitty, iterm or sixel, and the value none turns graphics
 	// off.
 	ErrNoGraphics Error = "termcast: terminal graphics are not available. Use Kitty, iTerm2 or a Sixel terminal, or set TERM_GRAPHICS to kitty, iterm or sixel"
-	// ErrVerbose is the error for the flag of the stream together with the
-	// flag -v.
-	ErrVerbose Error = "termcast: the stream on the terminal does not work with -v, because the protocol messages draw over the frames"
 )
 
 // clear moves the cursor to the top left and clears the screen. It does not
 // clear the scrollback, and it does not change the screen mode.
 const clear = "\x1b[H\x1b[2J"
 
-// Available reports whether the terminal has graphics that [Start] can use with
-// its default encoder. It reports what [rasterm.Available] reports.
-func Available() bool {
-	return rasterm.Available()
-}
-
-// Stream draws the screen of a page in the terminal. [Start] makes it. Every
-// method is safe on a nil pointer, and safe to call from several goroutines.
+// Stream draws the screen of a page in the terminal. [Start] makes it. A nil
+// stream is a stream that is off. Every method is safe on a nil pointer, and
+// safe to call from several goroutines.
 type Stream struct {
 	cfg *config
+	// term is the terminal that the stream draws on, and keys is the input
+	// that detection read and that is not an answer of the terminal.
+	term rasterm.Terminal
+	keys []byte
+	// enc is the encoder of the terminal.
+	enc rasterm.Encoder
+	// kitty is the encoder of the Kitty stream, or nil when the stream clears
+	// the screen at each frame.
+	kitty *rasterm.KittyEncoder
+	// ks is the Kitty stream that is on the screen. The drawing goroutine uses
+	// it, and Stop uses it after that goroutine has ended.
+	ks *rasterm.KittyStream
 	// ctx is the context that the caller gave to Start.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -111,15 +118,34 @@ type Stream struct {
 // The context is a chromedp context. Start starts the browser and opens the
 // target when the context has none yet, as [chromedp.Run] does.
 //
-// Start returns [ErrNoGraphics] when the encoder is not available. The stream
-// ends when the context ends, and then it acts as [Stream.Stop].
+// Start first detects the terminal with [rasterm.Detect], unless
+// [WithTerminal] gives it. It returns [ErrNoGraphics] when the terminal has no
+// graphics. The stream ends when the context ends, and then it acts as
+// [Stream.Stop].
 func Start(ctx context.Context, opts ...Option) (*Stream, error) {
 	cfg, err := newConfig(opts)
 	if err != nil {
 		return nil, err
 	}
-	if !cfg.encoder.Available() {
+	var term rasterm.Terminal
+	var keys []byte
+	if cfg.term != nil {
+		term = *cfg.term
+	} else if term, keys, err = rasterm.Detect(ctx, cfg.detectOpts...); err != nil {
+		return nil, fmt.Errorf("detecting the terminal: %w", err)
+	}
+	// The encoder does not add a newline after an image. A newline at the
+	// bottom of the screen scrolls the image.
+	enc := cfg.encoder
+	if enc == nil {
+		enc = term.Encoder(rasterm.WithNoNewline())
+	}
+	if enc == nil {
 		return nil, ErrNoGraphics
+	}
+	var kitty *rasterm.KittyEncoder
+	if k, ok := enc.(rasterm.KittyEncoder); ok && animate(cfg, term) {
+		kitty = &k
 	}
 	if err := chromedp.Do(ctx); err != nil {
 		return nil, fmt.Errorf("starting the target: %w", err)
@@ -140,6 +166,10 @@ func Start(ctx context.Context, opts ...Option) (*Stream, error) {
 	}
 	s := &Stream{
 		cfg:    cfg,
+		term:   term,
+		keys:   keys,
+		enc:    enc,
+		kitty:  kitty,
 		ctx:    ctx,
 		cancel: cancel,
 		quit:   make(chan struct{}),
@@ -155,6 +185,17 @@ func Start(ctx context.Context, opts ...Option) (*Stream, error) {
 		}
 	}()
 	return s, nil
+}
+
+// animate reports whether the stream draws with a Kitty stream on term. The
+// option WithAnimation decides when it is given. Otherwise the terminal must
+// report that it plays a Kitty animation, or name itself kitty or Ghostty,
+// which play animations and do not report it.
+func animate(cfg *config, term rasterm.Terminal) bool {
+	if cfg.animation != nil {
+		return *cfg.animation
+	}
+	return term.KittyAnimation || strings.EqualFold(term.Name, "kitty") || strings.EqualFold(term.Name, "ghostty")
 }
 
 // read acknowledges and decodes the frames, and keeps the latest one.
@@ -175,7 +216,9 @@ func (s *Stream) read(ctx context.Context, frames iter.Seq2[page.EventScreencast
 			}
 			return
 		}
-		img, err := jpeg.Decode(bytes.NewReader(ev.Data))
+		// The decoded frame keeps its JPEG, so the iTerm2 encoder sends it
+		// as it is.
+		img, err := rasterm.DecodeJPEG(ev.Data)
 		if err != nil {
 			s.fail(fmt.Errorf("decoding a frame: %w", err))
 			continue
@@ -225,6 +268,10 @@ func (s *Stream) view(ctx context.Context, img image.Image, width float64) image
 	if s.cfg.element == nil {
 		return img
 	}
+	// A part of the frame needs the image itself, and not its JPEG.
+	if u, ok := img.(interface{ Unwrap() image.Image }); ok {
+		img = u.Unwrap()
+	}
 	// A page that does not have the element yet must not hold the stream.
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
@@ -259,19 +306,67 @@ func (s *Stream) view(ctx context.Context, img image.Image, width float64) image
 	return out
 }
 
-// draw clears the screen and draws the image. It encodes the image first and
-// writes the clear sequence and the image with one call, so that the screen
-// stays empty for a short time.
+// draw draws the image. Without a Kitty stream, it clears the screen first. It
+// encodes the image first and writes the clear sequence and the image with one
+// call, so that the screen stays empty for a short time.
 func (s *Stream) draw(img image.Image) error {
+	if s.kitty != nil {
+		return s.drawKitty(img)
+	}
 	var buf bytes.Buffer
 	buf.WriteString(clear)
-	if err := s.cfg.encoder.Encode(&buf, img); err != nil {
+	if err := s.enc.Encode(&buf, img); err != nil {
 		return fmt.Errorf("encoding a frame: %w", err)
 	}
 	if _, err := s.cfg.out.Write(buf.Bytes()); err != nil {
 		return fmt.Errorf("drawing a frame: %w", err)
 	}
 	return nil
+}
+
+// drawKitty draws the image into the Kitty stream, which changes the picture
+// on the screen with no clear and no flicker. It starts a Kitty stream for the
+// first frame, and a new one when the size of the frame changes. Then it
+// deletes the old image, clears the screen and places the new image at the top
+// left.
+func (s *Stream) drawKitty(img image.Image) error {
+	if s.ks != nil {
+		err := s.ks.Draw(img)
+		switch {
+		case err == nil:
+			return nil
+		case !errors.Is(err, rasterm.ErrFrameSize):
+			return fmt.Errorf("drawing a frame: %w", err)
+		}
+		if err := s.ks.Delete(); err != nil {
+			return fmt.Errorf("deleting the image of the old size: %w", err)
+		}
+		s.ks = nil
+	}
+	ks, err := s.kitty.Stream(&clearFirst{w: s.cfg.out}, img)
+	if err != nil {
+		return fmt.Errorf("drawing a frame: %w", err)
+	}
+	s.ks = ks
+	return nil
+}
+
+// clearFirst is a writer that writes the clear sequence in front of the bytes
+// of its first write, with one call, so that the screen stays empty for a short
+// time.
+type clearFirst struct {
+	w    io.Writer
+	done bool
+}
+
+// Write satisfies the [io.Writer] interface.
+func (c *clearFirst) Write(p []byte) (int, error) {
+	if c.done {
+		return c.w.Write(p)
+	}
+	c.done = true
+	n, err := c.w.Write(append([]byte(clear), p...))
+	return max(n-len(clear), 0), err
 }
 
 // fail keeps the first error of the stream.
@@ -285,13 +380,16 @@ func (s *Stream) fail(err error) {
 
 // Stop stops the screencast and the goroutines of the stream, draws the final
 // frame once, and then prints the held log lines. When no frame arrived, it
-// takes one screenshot as the final frame. It is safe to call more than once
-// and from several goroutines. A call that arrives while another one runs waits
+// takes one screenshot as the final frame. It returns the first error that the
+// stream met, such as an error of the encoder or of the output.
+//
+// Stop is safe to call more than once and from several goroutines. Each call
+// returns the same error. A call that arrives while another one runs waits
 // until that one is done. The stream also stops by itself when the context of
-// [Start] ends. It does nothing on a nil stream.
-func (s *Stream) Stop() {
+// [Start] ends. On a nil stream, Stop does nothing and returns nil.
+func (s *Stream) Stop() error {
 	if s == nil {
-		return
+		return nil
 	}
 	s.stopOnce.Do(func() {
 		close(s.quit)
@@ -327,6 +425,9 @@ func (s *Stream) Stop() {
 		}
 		s.flush()
 	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
 }
 
 // screenshot takes one screenshot of the page and decodes it. It returns nil
@@ -348,7 +449,7 @@ func (s *Stream) screenshot() image.Image {
 		}
 		return nil
 	}
-	img, err := jpeg.Decode(bytes.NewReader(res.Data))
+	img, err := rasterm.DecodeJPEG(res.Data)
 	if err != nil {
 		s.fail(fmt.Errorf("decoding the final screenshot: %w", err))
 		return nil
@@ -370,23 +471,26 @@ func (s *Stream) flush() {
 	}
 }
 
-// Fatal stops the stream, as [Stream.Stop] does, and then calls [log.Fatal]
-// with v. The program ends with the exit status 1. On a nil stream, it only
-// calls [log.Fatal].
-func (s *Stream) Fatal(v ...any) {
-	s.Stop()
-	log.Fatal(v...)
+// Terminal returns the terminal that the stream draws on, as [rasterm.Detect]
+// found it or as [WithTerminal] gave it. On a nil stream, it returns the zero
+// [rasterm.Terminal], which has no graphics.
+func (s *Stream) Terminal() rasterm.Terminal {
+	if s == nil {
+		return rasterm.Terminal{}
+	}
+	return s.term
 }
 
-// Err returns the first error that the stream met while it ran, such as an
-// error of the encoder or of the output. It returns nil on a nil stream.
-func (s *Stream) Err() error {
+// Keys returns the keys that the user typed while [Start] detected the
+// terminal, in the order of the typing. Detection reads the input to get the
+// answers of the terminal, so a program that reads its input must use these
+// keys as its first input. It returns nil on a nil stream, and when
+// [WithTerminal] turned detection off.
+func (s *Stream) Keys() []byte {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.err
+	return s.keys
 }
 
 // LogWriter returns a writer for the log lines of the program, for example for

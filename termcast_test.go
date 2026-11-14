@@ -18,6 +18,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/termcast"
+	"github.com/kenshaw/rasterm"
 )
 
 const clearScreen = "\x1b[H\x1b[2J"
@@ -51,11 +52,8 @@ func (b *syncBuffer) String() string {
 // fakeEncoder writes a marker for each frame and counts the frames. It needs no
 // terminal.
 type fakeEncoder struct {
-	unavailable bool
-	frames      atomic.Int64
+	frames atomic.Int64
 }
-
-func (e *fakeEncoder) Available() bool { return !e.unavailable }
 
 func (e *fakeEncoder) Encode(w io.Writer, img image.Image) error {
 	n := e.frames.Add(1)
@@ -96,7 +94,7 @@ func start(t *testing.T, ctx context.Context, fps float64) (*termcast.Stream, *f
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(s.Stop)
+	t.Cleanup(func() { s.Stop() })
 	return s, enc, out, logs
 }
 
@@ -126,7 +124,7 @@ func TestFramesArriveAtTheRate(t *testing.T) {
 	if strings.Contains(text, "\x1b[?1049h") || strings.Contains(text, "\x1b[?25l") {
 		t.Errorf("the output has an alternate screen or a hidden cursor: %q", text[:min(len(text), 80)])
 	}
-	if err := s.Err(); err != nil {
+	if err := s.Stop(); err != nil {
 		t.Errorf("Err: %v", err)
 	}
 }
@@ -222,21 +220,26 @@ func TestAPageThatStopsChangingStaysOnTheScreen(t *testing.T) {
 
 func TestNilStreamIsSafe(t *testing.T) {
 	var s *termcast.Stream
-	s.Stop()
-	s.Stop()
-	if err := s.Err(); err != nil {
-		t.Errorf("Err on a nil stream: %v", err)
+	for range 2 {
+		if err := s.Stop(); err != nil {
+			t.Errorf("Stop on a nil stream: %v", err)
+		}
 	}
 	if w := s.LogWriter(); w == nil {
 		t.Error("LogWriter on a nil stream is nil")
+	}
+	if term := s.Terminal(); term.Protocol != rasterm.None {
+		t.Errorf("Terminal on a nil stream has the protocol %v", term.Protocol)
+	}
+	if keys := s.Keys(); keys != nil {
+		t.Errorf("Keys on a nil stream: %q", keys)
 	}
 }
 
 func TestNoGraphics(t *testing.T) {
 	// The check comes before the browser, so a context without a browser is
 	// enough.
-	enc := &fakeEncoder{unavailable: true}
-	s, err := termcast.Start(context.Background(), termcast.WithEncoder(enc))
+	s, err := termcast.Start(context.Background(), termcast.WithTerminal(rasterm.Terminal{}))
 	if !errors.Is(err, termcast.ErrNoGraphics) || s != nil {
 		t.Errorf("got %v and %v, want ErrNoGraphics and a nil stream", s, err)
 	}
@@ -256,50 +259,6 @@ func TestInvalidOptions(t *testing.T) {
 		if s, err := termcast.Start(context.Background(), termcast.WithEncoder(new(fakeEncoder)), opt); err == nil || s != nil {
 			t.Errorf("%s: got %v and %v, want an error", name, s, err)
 		}
-	}
-}
-
-func TestFlags(t *testing.T) {
-	var f termcast.Flags
-	fs := newFlagSet(&f)
-	if err := fs.Parse(nil); err != nil {
-		t.Fatal(err)
-	}
-	if f.Enabled || f.FPS != 4 {
-		t.Errorf("got the defaults %+v, want off and 4 frames per second", f)
-	}
-	// Off: no stream and no error, with or without -v.
-	for _, verbose := range []bool{false, true} {
-		if s, err := f.Start(context.Background(), verbose); s != nil || err != nil {
-			t.Errorf("off, verbose %v: got %v and %v", verbose, s, err)
-		}
-	}
-	if err := fs.Parse([]string{"-visible-on-terminal", "-terminal-fps=2.5"}); err != nil {
-		t.Fatal(err)
-	}
-	if !f.Enabled || f.FPS != 2.5 {
-		t.Errorf("got %+v, want on and 2.5 frames per second", f)
-	}
-	if s, err := f.Start(context.Background(), true); !errors.Is(err, termcast.ErrVerbose) || s != nil {
-		t.Errorf("got %v and %v, want ErrVerbose and a nil stream", s, err)
-	}
-	if s, err := f.Start(context.Background(), false, termcast.WithEncoder(&fakeEncoder{unavailable: true})); !errors.Is(err, termcast.ErrNoGraphics) || s != nil {
-		t.Errorf("got %v and %v, want ErrNoGraphics and a nil stream", s, err)
-	}
-}
-
-func TestFlagsStartsAStream(t *testing.T) {
-	ctx := browser(t)
-	f := termcast.Flags{Enabled: true, FPS: 10}
-	enc, out := new(fakeEncoder), new(syncBuffer)
-	s, err := f.Start(ctx, false, termcast.WithEncoder(enc), termcast.WithOutput(out), termcast.WithLogOutput(io.Discard))
-	if err != nil || s == nil {
-		t.Fatalf("got %v and %v", s, err)
-	}
-	time.Sleep(time.Second)
-	s.Stop()
-	if enc.frames.Load() == 0 {
-		t.Error("the stream drew no frame")
 	}
 }
 
@@ -368,8 +327,8 @@ func TestStopDrawsAFrameWhenNoneArrived(t *testing.T) {
 	if !strings.Contains(out.String(), "[frame ") {
 		t.Errorf("the output has no frame: %q", out.String())
 	}
-	if err := s.Err(); err != nil {
-		t.Errorf("Err() = %v", err)
+	if err := s.Stop(); err != nil {
+		t.Errorf("Stop() = %v", err)
 	}
 }
 
@@ -428,8 +387,8 @@ func TestWithElementDrawsOnlyTheElement(t *testing.T) {
 	if w < 100 || h < 50 || w < 2*h-4 || w > 2*h+4 {
 		t.Errorf("the last frame is %dx%d, want a box with the ratio 2 to 1", w, h)
 	}
-	if err := s.Err(); err != nil {
-		t.Errorf("Err() = %v", err)
+	if err := s.Stop(); err != nil {
+		t.Errorf("Stop() = %v", err)
 	}
 }
 
@@ -450,5 +409,109 @@ func TestWithElementKeepsTheScreenWhenTheElementIsMissing(t *testing.T) {
 	s.Stop()
 	if got := enc.frames.Load(); got != 0 {
 		t.Errorf("the stream drew %d frames of an element that is not in the page", got)
+	}
+}
+
+// kittyImage starts the escape sequence of the Kitty graphics protocol.
+const kittyImage = "\x1b_G"
+
+func TestKittyStreamDrawsWithoutClear(t *testing.T) {
+	ctx := browser(t)
+	out := new(syncBuffer)
+	s, err := termcast.Start(ctx,
+		termcast.WithTerminal(rasterm.Terminal{Protocol: rasterm.Kitty}),
+		termcast.WithAnimation(true),
+		termcast.WithOutput(out),
+		termcast.WithLogOutput(io.Discard),
+		termcast.WithFPS(10),
+		termcast.WithMaxSize(320, 240),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	// The size of the page does not change, so the stream clears the screen
+	// once, for the first frame, and draws each later frame into the image.
+	if n := strings.Count(got, clearScreen); n != 1 {
+		t.Errorf("the stream cleared the screen %d times, want 1", n)
+	}
+	if n := strings.Count(got, kittyImage); n < 3 {
+		t.Errorf("the stream wrote %d Kitty sequences, want 3 or more", n)
+	}
+	if !strings.HasPrefix(got, clearScreen+kittyImage) {
+		t.Errorf("the output does not start with a clear and an image: %q", got[:min(len(got), 40)])
+	}
+}
+
+func TestKittyWithoutAnimationClearsEachFrame(t *testing.T) {
+	ctx := browser(t)
+	out := new(syncBuffer)
+	s, err := termcast.Start(ctx,
+		termcast.WithTerminal(rasterm.Terminal{Protocol: rasterm.Kitty}),
+		termcast.WithAnimation(false),
+		termcast.WithOutput(out),
+		termcast.WithLogOutput(io.Discard),
+		termcast.WithFPS(10),
+		termcast.WithMaxSize(320, 240),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), clearScreen); n < 2 {
+		t.Errorf("the stream cleared the screen %d times, want one for each frame", n)
+	}
+}
+
+func TestAnimationDefault(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		term rasterm.Terminal
+		opts []termcast.Option
+		want bool
+	}{
+		{"reported", rasterm.Terminal{Protocol: rasterm.Kitty, KittyAnimation: true}, nil, true},
+		{"kitty by name", rasterm.Terminal{Protocol: rasterm.Kitty, Name: "kitty"}, nil, true},
+		{"Ghostty by name", rasterm.Terminal{Protocol: rasterm.Kitty, Name: "ghostty"}, nil, true},
+		{"unknown", rasterm.Terminal{Protocol: rasterm.Kitty, Name: "konsole"}, nil, false},
+		{"forced on", rasterm.Terminal{Protocol: rasterm.Kitty}, []termcast.Option{termcast.WithAnimation(true)}, true},
+		{"forced off", rasterm.Terminal{Protocol: rasterm.Kitty, Name: "kitty"}, []termcast.Option{termcast.WithAnimation(false)}, false},
+	} {
+		if got := termcast.Animate(tt.term, tt.opts...); got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestDetectionKeepsTheKeys(t *testing.T) {
+	// TERM_GRAPHICS selects the protocol, so detection asks the terminal
+	// nothing and reads no keys.
+	ctx := browser(t)
+	s, err := termcast.Start(ctx,
+		termcast.WithDetectOptions(rasterm.WithGetenv(func(name string) string {
+			if name == "TERM_GRAPHICS" {
+				return "sixel"
+			}
+			return ""
+		})),
+		termcast.WithOutput(io.Discard),
+		termcast.WithLogOutput(io.Discard),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	if got := s.Terminal().Protocol; got != rasterm.Sixel {
+		t.Errorf("got the protocol %v, want Sixel", got)
+	}
+	if keys := s.Keys(); len(keys) != 0 {
+		t.Errorf("got the keys %q, want none", keys)
 	}
 }

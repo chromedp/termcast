@@ -1,6 +1,6 @@
 # The stream clears the screen and holds the log
 
-Status: Decided.
+Status: Amended by 2026-11-14-options-only-and-the-kitty-stream.md.
 
 ## Context
 

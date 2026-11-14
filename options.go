@@ -34,6 +34,14 @@ type config struct {
 	height  int
 	out     io.Writer
 	logOut  io.Writer
+	// term is the terminal that WithTerminal gives, or nil when Start detects
+	// the terminal.
+	term       *rasterm.Terminal
+	detectOpts []rasterm.DetectOption
+	// animation is the value of WithAnimation, or nil when the terminal
+	// decides.
+	animation *bool
+	// encoder replaces the encoder of the terminal. Only the tests set it.
 	encoder rasterm.Encoder
 	// element returns the box model of the element that the stream shows, or
 	// is nil when the stream shows the whole page.
@@ -62,15 +70,6 @@ func newConfig(opts []Option) (*config, error) {
 	case c.width <= 0 || c.height <= 0:
 		return nil, fmt.Errorf("termcast: the size must be more than 0, got %dx%d", c.width, c.height)
 	}
-	if c.encoder == nil {
-		// The encoders do not add a newline after an image. A newline at the
-		// bottom of the screen scrolls the image.
-		c.encoder = rasterm.NewDefaultEncoder(
-			rasterm.KittyEncoder{NoNewline: true},
-			rasterm.ITermEncoder{NoNewline: true},
-			rasterm.SixelEncoder{NoNewline: true},
-		)
-	}
 	return c, nil
 }
 
@@ -94,7 +93,8 @@ func WithMaxSize(width, height int) Option {
 }
 
 // WithOutput sets the writer that receives the frames. The default is
-// [os.Stdout].
+// [os.Stdout]. Detection asks the terminal on [os.Stdout] and [os.Stdin], so
+// give [WithTerminal] too when w is not that terminal.
 func WithOutput(w io.Writer) Option {
 	return func(c *config) { c.out = w }
 }
@@ -105,11 +105,31 @@ func WithLogOutput(w io.Writer) Option {
 	return func(c *config) { c.logOut = w }
 }
 
-// WithEncoder sets the encoder that draws a frame. The default encoder uses
-// Kitty, iTerm2 or Sixel graphics, as [rasterm] detects them. [Start] asks the
-// encoder that you give if it is available, and it does not ask [rasterm].
-func WithEncoder(enc rasterm.Encoder) Option {
-	return func(c *config) { c.encoder = enc }
+// WithTerminal makes [Start] use t, and not detect the terminal. Use it when
+// the program detected the terminal itself, or when the output is not the
+// terminal, for example rasterm.Terminal{Protocol: rasterm.Kitty} for a file.
+// [Start] returns [ErrNoGraphics] when t.Protocol is [rasterm.None].
+func WithTerminal(t rasterm.Terminal) Option {
+	return func(c *config) { c.term = &t }
+}
+
+// WithDetectOptions gives options to [rasterm.Detect], such as
+// [rasterm.WithTimeout]. [WithTerminal] turns detection off, and then the
+// options do nothing.
+func WithDetectOptions(opts ...rasterm.DetectOption) Option {
+	return func(c *config) { c.detectOpts = append(c.detectOpts, opts...) }
+}
+
+// WithAnimation turns the Kitty stream on or off. The Kitty stream draws each
+// frame into one Kitty image with [rasterm.KittyStream], so it does not clear
+// the screen and does not flicker. It works only with the Kitty protocol.
+//
+// By default, the stream uses it when the terminal reports that it plays a
+// Kitty animation, or when it names itself kitty or Ghostty. A terminal that
+// draws Kitty images but has no animation shows only the first frame of a
+// Kitty stream, so the default does not guess.
+func WithAnimation(on bool) Option {
+	return func(c *config) { c.animation = &on }
 }
 
 // WithElement makes the stream draw only the element that sel selects, and not

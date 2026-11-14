@@ -10,13 +10,12 @@ import (
 	"github.com/chromedp/termcast"
 )
 
-// A program registers the flags, starts the browser, and starts the stream
-// after the page has loaded. The stream is nil when the flag is off, and a nil
-// stream is safe to use.
+// A program has its own flag for the stream, and starts the stream only when
+// the flag is on. A nil stream is a stream that is off, so the program calls
+// Stop and LogWriter in either case.
 func Example() {
-	var tc termcast.Flags
-	tc.Register(flag.CommandLine)
-	verbose := flag.Bool("v", false, "print the protocol messages")
+	onTerminal := flag.Bool("visible-on-terminal", false, "draw the page in the terminal")
+	fps := flag.Float64("terminal-fps", termcast.DefaultFPS, "frames per second of the stream")
 	flag.Parse()
 
 	ctx, cancel := chromedp.NewContext(context.Background())
@@ -27,21 +26,25 @@ func Example() {
 		log.Fatal(err)
 	}
 
-	// Start the stream. It returns termcast.ErrVerbose for -v together with
-	// -visible-on-terminal, and termcast.ErrNoGraphics for a terminal that has
-	// no graphics.
-	s, err := tc.Start(ctx, *verbose)
-	if err != nil {
-		log.Fatal(err)
+	// Start the stream. Start returns termcast.ErrNoGraphics for a terminal
+	// that has no graphics.
+	var s *termcast.Stream
+	if *onTerminal {
+		var err error
+		if s, err = termcast.Start(ctx, termcast.WithFPS(*fps)); err != nil {
+			log.Fatal(err)
+		}
 	}
+	defer s.Stop()
 	// The log lines wait until the stream stops, so that they do not draw over
 	// the frames.
 	log.SetOutput(s.LogWriter())
-	defer s.Stop()
 
 	log.Println("the page is on the screen")
 	if err := chromedp.Do(ctx, chromedp.Sleep(5*time.Second)); err != nil {
-		// Fatal stops the stream, prints the log lines and exits.
-		s.Fatal(err)
+		// log.Fatal skips the deferred calls. Stop first, so that the final
+		// frame and the held log lines reach the terminal.
+		s.Stop()
+		log.Fatal(err)
 	}
 }

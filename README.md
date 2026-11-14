@@ -5,7 +5,8 @@
 `termcast` is a small Go package that streams the screen of a [`chromedp`][1]
 page to a terminal that has graphics. It uses the screencast of the Chrome
 DevTools Protocol to get the frames, and [`rasterm`][2] to draw them. It works
-in Kitty, iTerm2 and Sixel terminals. You start it with one call.
+in Kitty, iTerm2 and Sixel terminals. You start it with one call, and on a
+Kitty terminal it draws the frames with no flicker.
 
 [![Unit Tests][termcast-ci-status]][termcast-ci]
 [![Go Reference][goref-termcast-status]][goref-termcast]
@@ -14,8 +15,8 @@ in Kitty, iTerm2 and Sixel terminals. You start it with one call.
 
 ## Install
 
-The module needs Go 1.25 or later. It requires `chromedp` v0.20.0 and
-`cdproto` v0.157.8.
+The module needs Go 1.25 or later. It requires `chromedp` v0.23.1, `cdproto`
+v0.160.1 and `rasterm` v0.3.1.
 
 ```sh
 go get github.com/chromedp/termcast
@@ -24,9 +25,12 @@ go get github.com/chromedp/termcast
 ## Usage
 
 Load the page first, so that the stream has a page to show. `Start` also starts
-the browser when the context has none. Then call `Flags.Start` or `Start` with
-the context. The stream stops when you call
-`Stop`, and when the context ends.
+the browser when the context has none. The stream stops when you call `Stop`,
+and when the context ends.
+
+The program owns its flags. Start the stream only when the flag of the program
+asks for it. A nil `*Stream` is a stream that is off, and its methods are safe,
+so the program calls `Stop` and `LogWriter` in either case.
 
 ```go
 package main
@@ -42,9 +46,8 @@ import (
 )
 
 func main() {
-	var tc termcast.Flags
-	tc.Register(flag.CommandLine)
-	verbose := flag.Bool("v", false, "print the protocol messages")
+	onTerminal := flag.Bool("visible-on-terminal", false, "draw the page in the terminal")
+	fps := flag.Float64("terminal-fps", termcast.DefaultFPS, "frames per second of the stream")
 	flag.Parse()
 
 	ctx, cancel := chromedp.NewContext(context.Background())
@@ -55,18 +58,21 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// s is nil when the flag -visible-on-terminal is off. A nil stream is
-	// safe to use.
-	s, err := tc.Start(ctx, *verbose)
-	if err != nil {
-		log.Fatal(err)
+	var s *termcast.Stream
+	if *onTerminal {
+		var err error
+		if s, err = termcast.Start(ctx, termcast.WithFPS(*fps)); err != nil {
+			log.Fatal(err)
+		}
 	}
-	log.SetOutput(s.LogWriter())
 	defer s.Stop()
+	log.SetOutput(s.LogWriter())
 
 	log.Println("the page is on the screen")
 	if err := chromedp.Do(ctx, chromedp.Sleep(10*time.Second)); err != nil {
-		s.Fatal(err)
+		// log.Fatal skips the deferred calls, so stop the stream first.
+		s.Stop()
+		log.Fatal(err)
 	}
 }
 ```
@@ -77,21 +83,31 @@ Run it with the flag:
 go run . -visible-on-terminal
 ```
 
-To start the stream with no flag, call `termcast.Start(ctx, opts...)`.
-
 ## How it works
 
-The browser sends a frame only when the page changes. The stream keeps the
-latest frame. At each tick it clears the terminal and draws the latest frame,
-but only when the frame is new. A page that stops changing stays on the screen.
-A program can end before the browser sends the first frame. In that case `Stop`
-takes one screenshot, so that the final frame is never empty.
+`Start` asks the terminal which graphics protocols it has, with
+`rasterm.Detect`. Then it starts the screencast of the page.
 
-The stream clears the screen with `\x1b[H\x1b[2J` at each redraw. It uses no
-alternate screen and does not hide the cursor. A program that ends with
-`log.Fatal` skips its deferred calls, and the terminal must not stay in a
-changed state. See
-[the decision](docs/decisions/2026-10-04-the-stream-clears-the-screen-and-holds-the-log.md).
+The browser sends a frame only when the page changes. The stream keeps the
+latest frame and draws it at each tick, but only when the frame is new. A page
+that stops changing stays on the screen. A program can end before the browser
+sends the first frame. In that case `Stop` takes one screenshot, so that the
+final frame is never empty.
+
+The stream draws a frame in one of two ways:
+
+1. On a Kitty terminal that plays animations, it draws each frame into one
+   Kitty image with `rasterm.KittyStream`. The picture changes at once, with no
+   clear and no flicker. When the size of the frame changes, the stream deletes
+   the image, clears the screen once and starts a new image.
+2. On other terminals, it clears the screen with `\x1b[H\x1b[2J` and draws the
+   frame.
+
+The stream uses no alternate screen and does not hide the cursor. A program
+that ends with `log.Fatal` skips its deferred calls, and the terminal must not
+stay in a changed state. See
+[the decision](docs/decisions/2026-10-04-the-stream-clears-the-screen-and-holds-the-log.md)
+and [the decision for the new API](docs/decisions/2026-11-14-options-only-and-the-kitty-stream.md).
 
 ## Options
 
@@ -103,14 +119,13 @@ changed state. See
 | `WithOutput(w)` | `os.Stdout` | The writer that receives the frames |
 | `WithLogOutput(w)` | `os.Stderr` | The writer that receives the held log lines |
 | `WithElement(sel)` | the whole page | Draws only the element that the selector finds |
-| `WithEncoder(e)` | Kitty, iTerm2 or Sixel | The `rasterm.Encoder` that draws a frame |
-
-`Flags` registers two flags: `-visible-on-terminal`, which turns the stream on,
-and `-terminal-fps`, which sets the frame rate and defaults to 4.
+| `WithTerminal(t)` | detection | The `rasterm.Terminal` to draw on, with no detection |
+| `WithDetectOptions(opts...)` | none | The options of `rasterm.Detect`, such as a timeout |
+| `WithAnimation(on)` | the terminal decides | Turns the Kitty stream on or off |
 
 ## Programs that use it
 
-The [`chromedp/examples`](https://github.com/chromedp/examples) repository has 34 programs that use `termcast`. Most of them take the flags `-visible-on-terminal` and `-terminal-fps` with `Flags`. The program [termcast](https://github.com/chromedp/examples/tree/main/termcast) calls `Start` directly. It plays an animated SVG and streams it to the terminal. These programs use the package: [click](https://github.com/chromedp/examples/tree/main/click), [console](https://github.com/chromedp/examples/tree/main/console), [cookie](https://github.com/chromedp/examples/tree/main/cookie), [dialogs](https://github.com/chromedp/examples/tree/main/dialogs), [download_file](https://github.com/chromedp/examples/tree/main/download_file), [download_image](https://github.com/chromedp/examples/tree/main/download_image), [dragdrop](https://github.com/chromedp/examples/tree/main/dragdrop), [emulate](https://github.com/chromedp/examples/tree/main/emulate), [eval](https://github.com/chromedp/examples/tree/main/eval), [eventsiter](https://github.com/chromedp/examples/tree/main/eventsiter), [exposefunc](https://github.com/chromedp/examples/tree/main/exposefunc), [extension](https://github.com/chromedp/examples/tree/main/extension), [fast](https://github.com/chromedp/examples/tree/main/fast), [forecast](https://github.com/chromedp/examples/tree/main/forecast), [frames](https://github.com/chromedp/examples/tree/main/frames), [geoip](https://github.com/chromedp/examples/tree/main/geoip), [headers](https://github.com/chromedp/examples/tree/main/headers), [intercept](https://github.com/chromedp/examples/tree/main/intercept), [keys](https://github.com/chromedp/examples/tree/main/keys), [latlon](https://github.com/chromedp/examples/tree/main/latlon), [logic](https://github.com/chromedp/examples/tree/main/logic), [pdf](https://github.com/chromedp/examples/tree/main/pdf), [pdfoptions](https://github.com/chromedp/examples/tree/main/pdfoptions), [proxy](https://github.com/chromedp/examples/tree/main/proxy), [remote](https://github.com/chromedp/examples/tree/main/remote), [screenshot](https://github.com/chromedp/examples/tree/main/screenshot), [selectors](https://github.com/chromedp/examples/tree/main/selectors), [structeval](https://github.com/chromedp/examples/tree/main/structeval), [submit](https://github.com/chromedp/examples/tree/main/submit), [subtree](https://github.com/chromedp/examples/tree/main/subtree), [termcast](https://github.com/chromedp/examples/tree/main/termcast), [text](https://github.com/chromedp/examples/tree/main/text), [upload](https://github.com/chromedp/examples/tree/main/upload) and [visible](https://github.com/chromedp/examples/tree/main/visible).
+The [`chromedp/examples`](https://github.com/chromedp/examples) repository has 34 programs that use `termcast`. Most of them take the flags `-visible-on-terminal` and `-terminal-fps`, which a small helper of that repository defines. The program [termcast](https://github.com/chromedp/examples/tree/main/termcast) calls `Start` directly. It plays an animated SVG and streams it to the terminal. These programs use the package: [click](https://github.com/chromedp/examples/tree/main/click), [console](https://github.com/chromedp/examples/tree/main/console), [cookie](https://github.com/chromedp/examples/tree/main/cookie), [dialogs](https://github.com/chromedp/examples/tree/main/dialogs), [download_file](https://github.com/chromedp/examples/tree/main/download_file), [download_image](https://github.com/chromedp/examples/tree/main/download_image), [dragdrop](https://github.com/chromedp/examples/tree/main/dragdrop), [emulate](https://github.com/chromedp/examples/tree/main/emulate), [eval](https://github.com/chromedp/examples/tree/main/eval), [eventsiter](https://github.com/chromedp/examples/tree/main/eventsiter), [exposefunc](https://github.com/chromedp/examples/tree/main/exposefunc), [extension](https://github.com/chromedp/examples/tree/main/extension), [fast](https://github.com/chromedp/examples/tree/main/fast), [forecast](https://github.com/chromedp/examples/tree/main/forecast), [frames](https://github.com/chromedp/examples/tree/main/frames), [geoip](https://github.com/chromedp/examples/tree/main/geoip), [headers](https://github.com/chromedp/examples/tree/main/headers), [intercept](https://github.com/chromedp/examples/tree/main/intercept), [keys](https://github.com/chromedp/examples/tree/main/keys), [latlon](https://github.com/chromedp/examples/tree/main/latlon), [logic](https://github.com/chromedp/examples/tree/main/logic), [pdf](https://github.com/chromedp/examples/tree/main/pdf), [pdfoptions](https://github.com/chromedp/examples/tree/main/pdfoptions), [proxy](https://github.com/chromedp/examples/tree/main/proxy), [remote](https://github.com/chromedp/examples/tree/main/remote), [screenshot](https://github.com/chromedp/examples/tree/main/screenshot), [selectors](https://github.com/chromedp/examples/tree/main/selectors), [structeval](https://github.com/chromedp/examples/tree/main/structeval), [submit](https://github.com/chromedp/examples/tree/main/submit), [subtree](https://github.com/chromedp/examples/tree/main/subtree), [termcast](https://github.com/chromedp/examples/tree/main/termcast), [text](https://github.com/chromedp/examples/tree/main/text), [upload](https://github.com/chromedp/examples/tree/main/upload) and [visible](https://github.com/chromedp/examples/tree/main/visible).
 
 ## Show one element
 
@@ -136,38 +151,61 @@ The terminal must support one of these graphics protocols:
 - iTerm2, WezTerm and mintty
 - Sixel
 
-`rasterm` detects the protocol from the environment (`TERM`, `TERM_PROGRAM`,
-`LC_TERMINAL` and the variables of Kitty) and, for Sixel, with a query to the
-terminal. The variable `TERM_GRAPHICS` forces the protocol to `kitty`, `iterm`
-or `sixel`, and the value `none` turns graphics off. `Start` returns
-`ErrNoGraphics` when no protocol is available. `Available` reports the same
-thing before you start.
+`Start` calls `rasterm.Detect`. It asks the terminal with a query, and reads the
+environment when the terminal does not answer. The variable `TERM_GRAPHICS`
+forces the protocol to `kitty`, `iterm`, `sixel` or `halfblock`, and the value
+`none` turns graphics off. `Start` returns `ErrNoGraphics` when no protocol is
+available.
+
+The query reads the input of the terminal. When the user types while `Start`
+waits for the answer, `Stream.Keys` returns those keys. A program that reads its
+input must use them as its first input. `Stream.Terminal` returns what
+detection found.
+
+To skip detection, give the terminal with `WithTerminal`. Use it when the
+output is not the terminal, for example when the frames go to a file:
+
+```go
+s, err := termcast.Start(ctx,
+	termcast.WithOutput(f),
+	termcast.WithTerminal(rasterm.Terminal{Protocol: rasterm.Kitty}),
+)
+```
+
+The Kitty stream needs a terminal that plays Kitty animations. By default the
+stream uses it when the terminal reports that it plays them, or names itself
+kitty or Ghostty. Other terminals that draw Kitty images get a clear at each
+frame. `WithAnimation(true)` forces the Kitty stream, and `WithAnimation(false)`
+turns it off.
 
 ## Log lines
 
-A log line that the program prints draws over the frames, and the next redraw
-erases it. `Stream.LogWriter` returns a writer that holds the lines while the
-stream runs. When the stream stops, it draws a final frame and then prints the
-lines to the log output. Use `log.SetOutput(s.LogWriter())`. After `Stop`, the
-writer passes each line on at once.
+A log line that the program prints draws over the frames. `Stream.LogWriter`
+returns a writer that holds the lines while the stream runs. When the stream
+stops, it draws a final frame and then prints the lines to the log output. Use
+`log.SetOutput(s.LogWriter())`. After `Stop`, the writer passes each line on at
+once.
 
-`Stream.Fatal` stops the stream, prints the held lines, and then calls
-`log.Fatal`. Use it where a program calls `log.Fatal`, because `log.Fatal` ends
-the program before a deferred `Stop` runs.
+`log.Fatal` ends the program before a deferred `Stop` runs. So call `s.Stop()`
+before `log.Fatal`, and the final frame and the held lines reach the terminal.
+`Stop` returns the first error that the stream met.
 
 Every method of `*Stream` is safe on a nil pointer. On a nil stream, `Stop` does
-nothing, `Fatal` calls `log.Fatal` and `LogWriter` returns `os.Stderr`.
+nothing and returns nil, `LogWriter` returns `os.Stderr`, `Terminal` returns the
+zero `rasterm.Terminal` and `Keys` returns nil.
 
-## The flag -v
+## Other output
 
-The flag `-v` of a program prints the protocol messages. They draw over the
-frames, so the two do not work together. `Flags.Start` returns `ErrVerbose`
-when both are on.
+Output that draws over the frames does not work together with the stream. An
+example is the protocol messages of `chromedp.WithDebugf`, which the flag `-v`
+of the examples turns on. The program decides which one it shows. The examples
+stop with an error when both flags are on.
 
 ## Tests
 
-The tests start Chrome and need no terminal. They use a fake encoder and a local
-page that animates. See [`AGENTS.md`](AGENTS.md) for the commands.
+The tests start Chrome and need no terminal. They give the terminal with
+`WithTerminal`, use a fake encoder or a buffer, and load a local page that
+animates. See [`AGENTS.md`](AGENTS.md) for the commands.
 
 ```sh
 GOWORK=off go test -race ./...

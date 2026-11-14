@@ -6,9 +6,9 @@ the Chrome DevTools Protocol and the package `github.com/kenshaw/rasterm`. The
 module is `github.com/chromedp/termcast`. The example programs of
 `chromedp/examples` use it for the flag `-visible-on-terminal`.
 
-The package uses `chromedp` v0.20.0 and `cdproto` v0.157.8. It has no other
-dependency, apart from `rasterm` and the Go standard library. The module needs
-Go 1.25 or later.
+The package uses `chromedp` v0.23.1, `cdproto` v0.160.1 and `rasterm` v0.3.1.
+It has no other dependency, apart from the Go standard library. The module
+needs Go 1.25 or later.
 
 ## Standing rules
 
@@ -37,6 +37,7 @@ you trust it, because a later decision can amend or replace it.
 | --- | --- |
 | looking for what the package is and how to use it | `README.md` |
 | asking why the stream clears the screen, holds the log lines and has no alternate screen | `docs/decisions/2026-10-04-the-stream-clears-the-screen-and-holds-the-log.md` |
+| asking why the package has no flags, detects the terminal in `Start` and draws with a Kitty stream | `docs/decisions/2026-11-14-options-only-and-the-kitty-stream.md` |
 | asking why something is the way it is | the index in `docs/decisions/README.md` |
 | preparing a change as a person | `CONTRIBUTING.md` |
 
@@ -60,7 +61,7 @@ you trust it, because a later decision can amend or replace it.
 | --- | --- |
 | `termcast.go` | the package comment, `Start`, `Stream` and the errors |
 | `options.go` | the options and their defaults |
-| `flags.go` | `Flags`, the helper for the flags of a program |
+| `export_test.go` | the hooks of the tests, such as a fake encoder |
 | `*_test.go` | the tests and the example. The tests need Chrome |
 | `docs/decisions/` | the decisions and their index |
 | `docs/docs_test.go` | the test of the documents and the Go comments |
